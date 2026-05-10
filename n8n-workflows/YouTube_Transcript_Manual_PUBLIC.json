@@ -1,0 +1,170 @@
+{
+  "name": "YouTube Transcript → Manual",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "d5e72e2a-edf1-4ade-b129-e79a306a09a8",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-336, -144]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f1",
+              "name": "youtube_url",
+              "value": "https://www.youtube.com/watch?v=REPLACE_VIDEO_ID",
+              "type": "string"
+            },
+            {
+              "id": "f3",
+              "name": "gdrive_folder_id",
+              "value": "REPLACE_YOUR_GOOGLE_DRIVE_FOLDER_ID",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "c64f24e0-7eae-497d-9bce-b9e38acb0875",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [-112, -144]
+    },
+    {
+      "parameters": {
+        "jsCode": "try {\n  const url = $input.item.json.youtube_url;\n  const match = url.match(/(?:youtube\\.com\\/watch\\?v=|youtu\\.be\\/|youtube\\.com\\/embed\\/)([^&\\n?#]+)/);\n  if (!match) throw new Error('URL YouTube tidak valid: ' + url);\n  return [{ json: {\n    youtube_url: url,\n    video_id: match[1],\n    gdrive_folder_id: $input.item.json.gdrive_folder_id\n  }}];\n} catch (error) {\n  return [{ json: { error: error.message, success: false } }];\n}"
+      },
+      "id": "334c5fcb-3957-4529-86d7-5918bf601fda",
+      "name": "Extract Video ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [112, -144]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.youtube.com/oembed?url={{ $json.youtube_url }}&format=json",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [336, -144],
+      "id": "dddca491-b52a-45d4-ba98-5e1a5824f55d",
+      "name": "Get Video Meta"
+    },
+    {
+      "parameters": {
+        "url": "https://api.supadata.ai/v1/youtube/transcript",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $('Extract Video ID').item.json.youtube_url }}"
+            },
+            {
+              "name": "lang",
+              "value": "id"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "REPLACE_YOUR_SUPADATA_API_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [-336, 96],
+      "id": "a91bf455-dc36-4a13-bd6b-f93ae8045dca",
+      "name": "HTTP Request (Supadata)"
+    },
+    {
+      "parameters": {
+        "jsCode": "try {\n  const data = $input.item.json;\n  const videoMeta = $('Extract Video ID').item.json;\n  const oEmbed = $('Get Video Meta').item.json;\n\n  if (!data.content || data.content.length === 0) {\n    throw new Error('Transcript kosong dari Supadata. Cek API key dan pastikan video punya caption.');\n  }\n\n  const transcriptText = data.content\n    .map(seg => (seg.text || '').replace(/\\n/g, ' ').trim())\n    .filter(t => t.length > 0)\n    .join('\\n');\n\n  const today = new Date().toISOString().split('T')[0];\n  const videoId = videoMeta.video_id;\n  const youtubeUrl = videoMeta.youtube_url;\n  const lang = data.lang || 'id';\n  const title = oEmbed.title || videoId;\n  const author = oEmbed.author_name || 'Unknown';\n\n  const cleanTitle = title.replace(/[^a-zA-Z0-9\\s\\-_]/g, '').trim().replace(/\\s+/g, '_').substring(0, 60);\n  const filename = 'Transcript_' + cleanTitle + '_' + today + '.md';\n\n  const markdown = [\n    '# Transcript: ' + title,\n    '',\n    '**Channel / Author:** ' + author,\n    '**Video ID:** ' + videoId,\n    '**URL:** ' + youtubeUrl,\n    '**Bahasa:** ' + lang,\n    '**Tanggal Transcript:** ' + today,\n    '**Total Segments:** ' + data.content.length,\n    '',\n    '---',\n    '',\n    transcriptText,\n  ].join('\\n');\n\n  return [{ json: {\n    video_id:        videoId,\n    title,\n    author,\n    youtube_url:     youtubeUrl,\n    language:        lang,\n    transcript_text: transcriptText,\n    markdown,\n    filename,\n    line_count:      data.content.length,\n    gdrive_folder_id: videoMeta.gdrive_folder_id || '',\n  }}];\n} catch (error) {\n  return [{ json: { error: error.message, success: false } }];\n}"
+      },
+      "id": "94bf76d3-edb0-47f5-a285-0c8653ce4822",
+      "name": "Format Markdown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-112, 96]
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "markdown",
+        "options": {
+          "fileName": "={{ $json.filename }}"
+        }
+      },
+      "id": "64492580-8682-466d-901b-22b5953874cd",
+      "name": "Convert to File",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1,
+      "position": [112, 96]
+    },
+    {
+      "parameters": {
+        "name": "={{ $('Format Markdown').item.json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "value": "MyDrive",
+          "mode": "list",
+          "cachedResultName": "My Drive",
+          "cachedResultUrl": "https://drive.google.com/drive/my-drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Format Markdown').item.json.gdrive_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "ec6bb89b-e7da-458e-88e6-76b924fd4f1e",
+      "name": "Save to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [336, 96]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{ "node": "Config", "type": "main", "index": 0 }]]
+    },
+    "Config": {
+      "main": [[{ "node": "Extract Video ID", "type": "main", "index": 0 }]]
+    },
+    "Extract Video ID": {
+      "main": [[{ "node": "Get Video Meta", "type": "main", "index": 0 }]]
+    },
+    "Get Video Meta": {
+      "main": [[{ "node": "HTTP Request (Supadata)", "type": "main", "index": 0 }]]
+    },
+    "HTTP Request (Supadata)": {
+      "main": [[{ "node": "Format Markdown", "type": "main", "index": 0 }]]
+    },
+    "Format Markdown": {
+      "main": [[{ "node": "Convert to File", "type": "main", "index": 0 }]]
+    },
+    "Convert to File": {
+      "main": [[{ "node": "Save to Google Drive", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "tags": []
+}

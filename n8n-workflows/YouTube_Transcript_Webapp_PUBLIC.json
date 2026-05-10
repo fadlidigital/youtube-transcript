@@ -1,0 +1,170 @@
+{
+  "name": "YouTube Transcript → Custom Webapp",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "yt-transcript",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [-400, -128],
+      "id": "9caf8439-cf3e-4361-b490-484cf2f0b5f2",
+      "name": "Webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "try {\n  const body = $input.item.json.body;\n  const url = body.youtube_url;\n\n  if (!url) throw new Error('youtube_url tidak ditemukan di request body');\n\n  const match = url.match(/(?:youtube\\.com\\/watch\\?v=|youtu\\.be\\/|youtube\\.com\\/embed\\/)([^&\\n?#]+)/);\n  if (!match) throw new Error('URL YouTube tidak valid: ' + url);\n\n  return [{ json: {\n    youtube_url:      url,\n    video_id:         match[1],\n    gdrive_folder_id: 'REPLACE_YOUR_GOOGLE_DRIVE_FOLDER_ID'\n  }}];\n} catch (error) {\n  return [{ json: { error: error.message, success: false } }];\n}"
+      },
+      "id": "07b9479c-e3e4-4c4f-8d29-4b8fa03d800d",
+      "name": "Extract Video ID",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-176, -128]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.youtube.com/oembed?url={{ $json.youtube_url }}&format=json",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [48, -128],
+      "id": "ba11cf6c-8cfa-48ef-9138-fa3475f2ce72",
+      "name": "Get Video Meta"
+    },
+    {
+      "parameters": {
+        "url": "https://api.supadata.ai/v1/youtube/transcript",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "url",
+              "value": "={{ $('Extract Video ID').item.json.youtube_url }}"
+            },
+            {
+              "name": "lang",
+              "value": "id"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "REPLACE_YOUR_SUPADATA_API_KEY"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [272, -128],
+      "id": "895343cf-8184-42ea-8568-bbc181716944",
+      "name": "HTTP Request (Supadata)"
+    },
+    {
+      "parameters": {
+        "jsCode": "try {\n  const data = $input.item.json;\n  const videoMeta = $('Extract Video ID').item.json;\n  const oEmbed = $('Get Video Meta').item.json;\n\n  if (!data.content || data.content.length === 0) {\n    throw new Error('Transcript kosong dari Supadata. Cek API key dan pastikan video punya caption.');\n  }\n\n  const transcriptText = data.content\n    .map(seg => (seg.text || '').replace(/\\n/g, ' ').trim())\n    .filter(t => t.length > 0)\n    .join('\\n');\n\n  const today = new Date().toISOString().split('T')[0];\n  const videoId = videoMeta.video_id;\n  const youtubeUrl = videoMeta.youtube_url;\n  const lang = data.lang || 'id';\n  const title = oEmbed.title || videoId;\n  const author = oEmbed.author_name || 'Unknown';\n\n  const cleanTitle = title.replace(/[^a-zA-Z0-9\\s\\-_]/g, '').trim().replace(/\\s+/g, '_').substring(0, 60);\n  const filename = 'Transcript_' + cleanTitle + '_' + today + '.md';\n\n  const markdown = [\n    '# Transcript: ' + title,\n    '',\n    '**Channel / Author:** ' + author,\n    '**Video ID:** ' + videoId,\n    '**URL:** ' + youtubeUrl,\n    '**Bahasa:** ' + lang,\n    '**Tanggal Transcript:** ' + today,\n    '**Total Segments:** ' + data.content.length,\n    '',\n    '---',\n    '',\n    transcriptText,\n  ].join('\\n');\n\n  return [{ json: {\n    video_id:        videoId,\n    title,\n    author,\n    youtube_url:     youtubeUrl,\n    language:        lang,\n    transcript_text: transcriptText,\n    markdown,\n    filename,\n    line_count:      data.content.length,\n    gdrive_folder_id: videoMeta.gdrive_folder_id || '',\n  }}];\n} catch (error) {\n  return [{ json: { error: error.message, success: false } }];\n}"
+      },
+      "id": "a49ca08d-74a7-46b4-bdf4-6d46f062edec",
+      "name": "Format Markdown",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-400, 112]
+    },
+    {
+      "parameters": {
+        "operation": "toText",
+        "sourceProperty": "markdown",
+        "options": {
+          "fileName": "={{ $json.filename }}"
+        }
+      },
+      "id": "d1dbc361-1840-4900-b51b-fb9ee018219d",
+      "name": "Convert to File",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1,
+      "position": [-176, 112]
+    },
+    {
+      "parameters": {
+        "name": "={{ $('Format Markdown').item.json.filename }}",
+        "driveId": {
+          "__rl": true,
+          "value": "MyDrive",
+          "mode": "list",
+          "cachedResultName": "My Drive",
+          "cachedResultUrl": "https://drive.google.com/drive/my-drive"
+        },
+        "folderId": {
+          "__rl": true,
+          "value": "={{ $('Format Markdown').item.json.gdrive_folder_id }}",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "f7483273-e0bc-483a-9e4b-9297c722e3e1",
+      "name": "Save to Google Drive",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 3,
+      "position": [48, 112]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"title\": \"{{ $('Format Markdown').item.json.title }}\",\n  \"filename\": \"{{ $('Format Markdown').item.json.filename }}\",\n  \"line_count\": {{ $('Format Markdown').item.json.line_count }},\n  \"language\": \"{{ $('Format Markdown').item.json.language }}\",\n  \"drive_url\": \"{{ $json.webViewLink }}\"\n}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Access-Control-Allow-Origin",
+                "value": "*"
+              }
+            ]
+          }
+        }
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [272, 112],
+      "id": "f6662dce-de16-43bd-bfd2-ab10d815f44d",
+      "name": "Respond to Webhook"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [[{ "node": "Extract Video ID", "type": "main", "index": 0 }]]
+    },
+    "Extract Video ID": {
+      "main": [[{ "node": "Get Video Meta", "type": "main", "index": 0 }]]
+    },
+    "Get Video Meta": {
+      "main": [[{ "node": "HTTP Request (Supadata)", "type": "main", "index": 0 }]]
+    },
+    "HTTP Request (Supadata)": {
+      "main": [[{ "node": "Format Markdown", "type": "main", "index": 0 }]]
+    },
+    "Format Markdown": {
+      "main": [[{ "node": "Convert to File", "type": "main", "index": 0 }]]
+    },
+    "Convert to File": {
+      "main": [[{ "node": "Save to Google Drive", "type": "main", "index": 0 }]]
+    },
+    "Save to Google Drive": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta"
+  },
+  "tags": []
+}
